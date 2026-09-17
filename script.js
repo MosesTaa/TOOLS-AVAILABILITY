@@ -1,1177 +1,858 @@
 "use strict";
 
-const VEHICLE_ID = "KDA123X";
-const TTC_THRESHOLD = 6;
-const ALERT_RADIUS = 0.5;
-const SECRET_KEY = "OvertakeSafetyKey";
-const AES_KEY = "AESSecret16Byte";
-const AES_IV = "AESInitVector16";
+const STORAGE_KEY = "hotpointToolsTrackerV1";
+const ADMIN_USER = "ADMIN";
+const ADMIN_PASSWORD = "Hotpoint_tools";
 
-const $ = id => document.getElementById(id);
-const enc = new TextEncoder();
-const dec = new TextDecoder();
-
-let state;
-let animationFrame;
-let requestTimer;
-let consentTimer;
-
-const replayTable = new Map();
+const seedTools = [
+    {
+        name: "Ladders",
+        quantity: 2,
+        description: "Access ladders for installation and service work."
+    },
+    {
+        name: "Flaring Kit",
+        quantity: 2,
+        description: "Copper pipe flaring tools and accessories."
+    },
+    {
+        name: "Oxy/Acetylene Gauge",
+        quantity: 1,
+        description: "Gauge set for controlled oxy-acetylene work."
+    },
+    {
+        name: "Grinder",
+        quantity: 2,
+        description: "Portable angle grinder for workshop and site tasks."
+    },
+    {
+        name: "Scaffolding",
+        quantity: 1,
+        description: "Mobile scaffolding set for elevated work."
+    }
+];
 
 /* =========================================================
-   ENCRYPTION AND SECURITY
-========================================================= */
+   GENERAL FUNCTIONS
+   ========================================================= */
 
-function pad16(text) {
-    const output = new Uint8Array(16);
-    output.set(enc.encode(text).slice(0, 16));
-    return output;
+function uid() {
+    return `${Date.now().toString(36)}${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
 }
 
-function bytesToHex(bytes) {
-    return [...new Uint8Array(bytes)]
-        .map(byte => byte.toString(16).padStart(2, "0"))
+function today() {
+    return new Date().toISOString().slice(0, 10);
+}
+
+function prettyDate(value) {
+    if (!value) {
+        return "—";
+    }
+
+    return new Date(`${value}T00:00:00`).toLocaleDateString(
+        "en-GB",
+        {
+            day: "2-digit",
+            month: "short",
+            year: "numeric"
+        }
+    );
+}
+
+function escapeHTML(value) {
+    return String(value).replace(/[&<>'"]/g, character => {
+        return {
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "'": "&#39;",
+            '"': "&quot;"
+        }[character];
+    });
+}
+
+function loadData() {
+    try {
+        const savedData = JSON.parse(
+            localStorage.getItem(STORAGE_KEY)
+        );
+
+        if (
+            savedData &&
+            Array.isArray(savedData.tools) &&
+            Array.isArray(savedData.history)
+        ) {
+            return savedData;
+        }
+    } catch (error) {
+        console.error("Unable to load saved data:", error);
+    }
+
+    const initialData = {
+        tools: seedTools.map(tool => ({
+            ...tool,
+            id: uid(),
+            assignments: []
+        })),
+        history: []
+    };
+
+    saveData(initialData);
+
+    return initialData;
+}
+
+function saveData(data) {
+    localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(data)
+    );
+
+    window.dispatchEvent(
+        new Event("tracker-updated")
+    );
+}
+
+function available(tool) {
+    return Math.max(
+        0,
+        tool.quantity - tool.assignments.length
+    );
+}
+
+function statusChip(text, type) {
+    return `
+        <span class="status ${type}">
+            ${escapeHTML(text)}
+        </span>
+    `;
+}
+
+/* =========================================================
+   REQUEST TOOL PAGE
+   ========================================================= */
+
+function initRequest() {
+    const searchInput =
+        document.querySelector("#toolSearch");
+
+    const historyFilter =
+        document.querySelector("#historyFilter");
+
+    function renderRequestPage() {
+        const data = loadData();
+
+        const searchText = searchInput.value
+            .trim()
+            .toLowerCase();
+
+        const displayedTools = data.tools.filter(tool => {
+            const searchableText = `
+                ${tool.name}
+                ${tool.description}
+                ${tool.assignments
+                    .map(item => item.technician)
+                    .join(" ")}
+            `.toLowerCase();
+
+            return searchableText.includes(searchText);
+        });
+
+        const totalUnits = data.tools.reduce(
+            (total, tool) => total + tool.quantity,
+            0
+        );
+
+        const totalAvailable = data.tools.reduce(
+            (total, tool) => total + available(tool),
+            0
+        );
+
+        const totalAllocated = data.tools.reduce(
+            (total, tool) =>
+                total + tool.assignments.length,
+            0
+        );
+
+        document.querySelector(
+            "#totalUnits"
+        ).textContent = totalUnits;
+
+        document.querySelector(
+            "#availableUnits"
+        ).textContent = totalAvailable;
+
+        document.querySelector(
+            "#allocatedUnits"
+        ).textContent = totalAllocated;
+
+        document.querySelector("#toolGrid").innerHTML =
+            displayedTools.map(tool => {
+                const freeUnits = available(tool);
+
+                const allocationList =
+                    tool.assignments.length > 0
+                        ? `
+                            <div class="assignments">
+                                ${tool.assignments
+                                    .map(assignment => `
+                                        <div class="assignment-line">
+                                            <strong>
+                                                ${escapeHTML(
+                                                    assignment.technician
+                                                )}
+                                            </strong>
+
+                                            <span>
+                                                ${prettyDate(
+                                                    assignment.assignedDate
+                                                )}
+                                            </span>
+                                        </div>
+                                    `)
+                                    .join("")}
+                            </div>
+                        `
+                        : "";
+
+                return `
+                    <article class="tool-card">
+                        <div class="tool-title">
+                            <h2>
+                                ${escapeHTML(tool.name)}
+                            </h2>
+
+                            ${
+                                freeUnits > 0
+                                    ? statusChip(
+                                        "AVAILABLE",
+                                        "free"
+                                    )
+                                    : statusChip(
+                                        "FULLY ALLOCATED",
+                                        "busy"
+                                    )
+                            }
+                        </div>
+
+                        <p class="description">
+                            ${escapeHTML(tool.description)}
+                        </p>
+
+                        <div class="availability">
+                            <div>
+                                <span>Total</span>
+                                <strong>${tool.quantity}</strong>
+                            </div>
+
+                            <div>
+                                <span>Free</span>
+                                <strong>${freeUnits}</strong>
+                            </div>
+
+                            <div>
+                                <span>Out</span>
+                                <strong>
+                                    ${tool.assignments.length}
+                                </strong>
+                            </div>
+                        </div>
+
+                        ${allocationList}
+                    </article>
+                `;
+            }).join("");
+
+        document.querySelector(
+            "#emptyTools"
+        ).hidden = displayedTools.length !== 0;
+
+        renderTechnicianFilter(data);
+        renderHistory(data);
+    }
+
+    function renderTechnicianFilter(data) {
+        const technicianNames = [
+            ...new Set(
+                data.history.map(
+                    record => record.technician
+                )
+            )
+        ].sort();
+
+        const selectedTechnician =
+            historyFilter.value;
+
+        historyFilter.innerHTML = `
+            <option value="">All technicians</option>
+
+            ${technicianNames
+                .map(name => `
+                    <option
+                        value="${escapeHTML(name)}"
+                        ${
+                            name === selectedTechnician
+                                ? "selected"
+                                : ""
+                        }
+                    >
+                        ${escapeHTML(name)}
+                    </option>
+                `)
+                .join("")}
+        `;
+    }
+
+    function renderHistory(data) {
+        const selectedTechnician =
+            historyFilter.value;
+
+        const allocationHistory = data.history
+            .filter(record => {
+                return (
+                    !selectedTechnician ||
+                    record.technician ===
+                        selectedTechnician
+                );
+            })
+            .sort((first, second) => {
+                return second.assignedDate.localeCompare(
+                    first.assignedDate
+                );
+            });
+
+        document.querySelector(
+            "#historyBody"
+        ).innerHTML = allocationHistory
+            .map(record => `
+                <tr>
+                    <td>
+                        ${escapeHTML(record.technician)}
+                    </td>
+
+                    <td>
+                        ${escapeHTML(record.toolName)}
+                    </td>
+
+                    <td>
+                        ${prettyDate(record.assignedDate)}
+                    </td>
+
+                    <td>
+                        ${prettyDate(record.releasedDate)}
+                    </td>
+
+                    <td>
+                        ${
+                            record.releasedDate
+                                ? statusChip(
+                                    "Released",
+                                    "free"
+                                )
+                                : statusChip(
+                                    "Allocated",
+                                    "busy"
+                                )
+                        }
+                    </td>
+                </tr>
+            `)
+            .join("");
+
+        document.querySelector(
+            "#emptyHistory"
+        ).hidden = allocationHistory.length !== 0;
+    }
+
+    searchInput.addEventListener(
+        "input",
+        renderRequestPage
+    );
+
+    historyFilter.addEventListener(
+        "change",
+        renderRequestPage
+    );
+
+    window.addEventListener(
+        "storage",
+        renderRequestPage
+    );
+
+    window.addEventListener(
+        "tracker-updated",
+        renderRequestPage
+    );
+
+    renderRequestPage();
+}
+
+/* =========================================================
+   ADMIN PAGE
+   ========================================================= */
+
+function initAdmin() {
+    const loginPanel =
+        document.querySelector("#loginPanel");
+
+    const adminPanel =
+        document.querySelector("#adminPanel");
+
+    const assignedDateInput =
+        document.querySelector("#assignedDate");
+
+    assignedDateInput.value = today();
+
+    function showAdminPanel() {
+        loginPanel.hidden = true;
+        adminPanel.hidden = false;
+
+        renderAdmin();
+    }
+
+    if (
+        sessionStorage.getItem("hotpointAdmin") === "yes"
+    ) {
+        showAdminPanel();
+    }
+
+    /* ADMIN LOGIN */
+
+    document.querySelector("#loginForm")
+        .addEventListener("submit", event => {
+            event.preventDefault();
+
+            const username =
+                document.querySelector("#username").value;
+
+            const password =
+                document.querySelector("#password").value;
+
+            const loginIsCorrect =
+                username === ADMIN_USER &&
+                password === ADMIN_PASSWORD;
+
+            if (!loginIsCorrect) {
+                document.querySelector(
+                    "#loginError"
+                ).textContent =
+                    "Incorrect username or password.";
+
+                return;
+            }
+
+            sessionStorage.setItem(
+                "hotpointAdmin",
+                "yes"
+            );
+
+            document.querySelector(
+                "#loginError"
+            ).textContent = "";
+
+            showAdminPanel();
+        });
+
+    /* ADMIN LOGOUT */
+
+    document.querySelector("#logoutBtn")
+        .addEventListener("click", () => {
+            sessionStorage.removeItem(
+                "hotpointAdmin"
+            );
+
+            adminPanel.hidden = true;
+            loginPanel.hidden = false;
+
+            document.querySelector(
+                "#password"
+            ).value = "";
+        });
+
+    /* ADD NEW TOOL */
+
+    document.querySelector("#toolForm")
+        .addEventListener("submit", event => {
+            event.preventDefault();
+
+            const data = loadData();
+
+            const toolName =
+                document.querySelector(
+                    "#toolName"
+                ).value.trim();
+
+            const toolQuantity = Number(
+                document.querySelector(
+                    "#toolQuantity"
+                ).value
+            );
+
+            const toolDescription =
+                document.querySelector(
+                    "#toolDescription"
+                ).value.trim();
+
+            data.tools.push({
+                id: uid(),
+                name: toolName,
+                quantity: toolQuantity,
+                description: toolDescription,
+                assignments: []
+            });
+
+            saveData(data);
+
+            event.target.reset();
+
+            document.querySelector(
+                "#toolQuantity"
+            ).value = 1;
+
+            renderAdmin();
+        });
+
+    /* ASSIGN TOOL */
+
+    document.querySelector("#assignmentForm")
+        .addEventListener("submit", event => {
+            event.preventDefault();
+
+            const data = loadData();
+
+            const selectedToolId =
+                document.querySelector(
+                    "#assignTool"
+                ).value;
+
+            const technicianName =
+                document.querySelector(
+                    "#technicianName"
+                ).value.trim();
+
+            const assignedDate =
+                assignedDateInput.value;
+
+            const tool = data.tools.find(
+                item => item.id === selectedToolId
+            );
+
+            if (!tool || available(tool) < 1) {
+                alert(
+                    "The selected tool is not available."
+                );
+
+                return;
+            }
+
+            const allocationRecord = {
+                id: uid(),
+                toolId: tool.id,
+                toolName: tool.name,
+                technician: technicianName,
+                assignedDate: assignedDate,
+                releasedDate: ""
+            };
+
+            tool.assignments.push(allocationRecord);
+
+            data.history.push({
+                ...allocationRecord
+            });
+
+            saveData(data);
+
+            event.target.reset();
+
+            assignedDateInput.value = today();
+
+            renderAdmin();
+        });
+
+    /* INVENTORY ACTIONS */
+
+    document.querySelector("#adminInventory")
+        .addEventListener("click", event => {
+            const button = event.target.closest(
+                "button[data-action]"
+            );
+
+            if (!button) {
+                return;
+            }
+
+            const data = loadData();
+
+            const tool = data.tools.find(
+                item => item.id === button.dataset.tool
+            );
+
+            if (!tool) {
+                return;
+            }
+
+            const action = button.dataset.action;
+
+            /* REMOVE TOOL */
+
+            if (action === "remove") {
+                if (tool.assignments.length > 0) {
+                    alert(
+                        "Release all allocated units before removing this tool."
+                    );
+
+                    return;
+                }
+
+                const shouldRemove = confirm(
+                    `Remove ${tool.name} from inventory?`
+                );
+
+                if (!shouldRemove) {
+                    return;
+                }
+
+                data.tools = data.tools.filter(
+                    item => item.id !== tool.id
+                );
+            }
+
+            /* SAVE QUANTITY */
+
+            if (action === "save") {
+                const quantityInput =
+                    document.querySelector(
+                        `[data-quantity="${tool.id}"]`
+                    );
+
+                const newQuantity =
+                    Number(quantityInput.value);
+
+                if (
+                    newQuantity <
+                    tool.assignments.length
+                ) {
+                    alert(
+                        `Quantity cannot be below ${tool.assignments.length} currently allocated unit(s).`
+                    );
+
+                    return;
+                }
+
+                if (newQuantity < 1) {
+                    alert(
+                        "Tool quantity must be at least 1."
+                    );
+
+                    return;
+                }
+
+                tool.quantity = newQuantity;
+            }
+
+            /* RELEASE TOOL */
+
+            if (action === "release") {
+                const assignment =
+                    tool.assignments.find(item => {
+                        return (
+                            item.id ===
+                            button.dataset.assignment
+                        );
+                    });
+
+                if (!assignment) {
+                    return;
+                }
+
+                tool.assignments =
+                    tool.assignments.filter(item => {
+                        return (
+                            item.id !== assignment.id
+                        );
+                    });
+
+                const historyRecord =
+                    data.history.find(record => {
+                        return (
+                            record.id === assignment.id
+                        );
+                    });
+
+                if (historyRecord) {
+                    historyRecord.releasedDate = today();
+                }
+            }
+
+            saveData(data);
+            renderAdmin();
+        });
+
+    window.addEventListener(
+        "storage",
+        renderAdmin
+    );
+}
+
+/* =========================================================
+   RENDER ADMIN INVENTORY
+   ========================================================= */
+
+function renderAdmin() {
+    const data = loadData();
+
+    const toolSelect =
+        document.querySelector("#assignTool");
+
+    if (!toolSelect) {
+        return;
+    }
+
+    const freeTools = data.tools.filter(
+        tool => available(tool) > 0
+    );
+
+    if (freeTools.length > 0) {
+        toolSelect.innerHTML = freeTools
+            .map(tool => `
+                <option value="${tool.id}">
+                    ${escapeHTML(tool.name)}
+                    (${available(tool)} free)
+                </option>
+            `)
+            .join("");
+    } else {
+        toolSelect.innerHTML = `
+            <option value="">
+                No tools available
+            </option>
+        `;
+    }
+
+    document.querySelector(
+        "#assignBtn"
+    ).disabled = freeTools.length === 0;
+
+    const inventoryContainer =
+        document.querySelector("#adminInventory");
+
+    if (data.tools.length === 0) {
+        inventoryContainer.innerHTML = `
+            <div class="empty">
+                No tools in inventory.
+                Add the first tool above.
+            </div>
+        `;
+
+        return;
+    }
+
+    inventoryContainer.innerHTML = data.tools
+        .map(tool => {
+            const currentAssignments =
+                tool.assignments.length > 0
+                    ? `
+                        <div class="current-list">
+                            ${tool.assignments
+                                .map(assignment => `
+                                    <div class="current-item">
+                                        <div>
+                                            <strong>
+                                                ${escapeHTML(
+                                                    assignment.technician
+                                                )}
+                                            </strong>
+
+                                            <br>
+
+                                            <small>
+                                                Assigned
+                                                ${prettyDate(
+                                                    assignment.assignedDate
+                                                )}
+                                            </small>
+                                        </div>
+
+                                        <button
+                                            data-action="release"
+                                            data-tool="${tool.id}"
+                                            data-assignment="${assignment.id}"
+                                        >
+                                            Release Tool
+                                        </button>
+                                    </div>
+                                `)
+                                .join("")}
+                        </div>
+                    `
+                    : "";
+
+            return `
+                <article class="inventory-row">
+                    <div class="inventory-head">
+                        <div>
+                            <h2>
+                                ${escapeHTML(tool.name)}
+                            </h2>
+
+                            <p>
+                                ${escapeHTML(
+                                    tool.description
+                                )}
+                                •
+                                ${available(tool)}
+                                of
+                                ${tool.quantity}
+                                available
+                            </p>
+                        </div>
+
+                        <label>
+                            Quantity
+
+                            <input
+                                data-quantity="${tool.id}"
+                                type="number"
+                                min="${tool.assignments.length || 1}"
+                                value="${tool.quantity}"
+                            >
+                        </label>
+
+                        <div class="inventory-actions">
+                            <button
+                                data-action="save"
+                                data-tool="${tool.id}"
+                            >
+                                Save
+                            </button>
+
+                            <button
+                                class="danger-button"
+                                data-action="remove"
+                                data-tool="${tool.id}"
+                            >
+                                Remove
+                            </button>
+                        </div>
+                    </div>
+
+                    ${currentAssignments}
+                </article>
+            `;
+        })
         .join("");
 }
 
-function hexToBytes(hex) {
-    const output = new Uint8Array(hex.length / 2);
-
-    for (let i = 0; i < output.length; i++) {
-        output[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-    }
-
-    return output;
-}
-
-async function hmacSign(message) {
-    if (!crypto.subtle) {
-        return "DEMO-HMAC-" + simpleHash(message);
-    }
-
-    const key = await crypto.subtle.importKey(
-        "raw",
-        enc.encode(SECRET_KEY),
-        {
-            name: "HMAC",
-            hash: "SHA-256"
-        },
-        false,
-        ["sign"]
-    );
-
-    const signature = await crypto.subtle.sign(
-        "HMAC",
-        key,
-        enc.encode(message)
-    );
-
-    return bytesToHex(signature);
-}
-
-async function encryptAES(plainText) {
-    if (!crypto.subtle) {
-        return bytesToHex(enc.encode(plainText));
-    }
-
-    const key = await crypto.subtle.importKey(
-        "raw",
-        pad16(AES_KEY),
-        {
-            name: "AES-CBC"
-        },
-        false,
-        ["encrypt"]
-    );
-
-    const encrypted = await crypto.subtle.encrypt(
-        {
-            name: "AES-CBC",
-            iv: pad16(AES_IV)
-        },
-        key,
-        enc.encode(plainText)
-    );
-
-    return bytesToHex(encrypted);
-}
-
-async function decryptAES(cipherHex) {
-    if (!crypto.subtle) {
-        return dec.decode(hexToBytes(cipherHex));
-    }
-
-    try {
-        const key = await crypto.subtle.importKey(
-            "raw",
-            pad16(AES_KEY),
-            {
-                name: "AES-CBC"
-            },
-            false,
-            ["decrypt"]
-        );
-
-        const decrypted = await crypto.subtle.decrypt(
-            {
-                name: "AES-CBC",
-                iv: pad16(AES_IV)
-            },
-            key,
-            hexToBytes(cipherHex)
-        );
-
-        return dec.decode(decrypted);
-    } catch {
-        return "";
-    }
-}
-
-function simpleHash(text) {
-    let hash = 2166136261;
-
-    for (const character of text) {
-        hash = Math.imul(
-            hash ^ character.charCodeAt(0),
-            16777619
-        );
-    }
-
-    return (hash >>> 0)
-        .toString(16)
-        .padStart(8, "0");
-}
-
 /* =========================================================
-   GPS AND VEHICLE CALCULATIONS
-========================================================= */
+   START CORRECT PAGE
+   ========================================================= */
 
-function haversine(lat1, lon1, lat2, lon2) {
-    const earthRadius = 6371;
-    const radians = number => number * Math.PI / 180;
-
-    const latitudeDifference = radians(lat2 - lat1);
-    const longitudeDifference = radians(lon2 - lon1);
-
-    const calculation =
-        Math.sin(latitudeDifference / 2) ** 2 +
-        Math.cos(radians(lat1)) *
-        Math.cos(radians(lat2)) *
-        Math.sin(longitudeDifference / 2) ** 2;
-
-    return earthRadius * 2 * Math.atan2(
-        Math.sqrt(calculation),
-        Math.sqrt(1 - calculation)
-    );
+if (document.body.dataset.page === "request") {
+    initRequest();
 }
 
-function computeTTC(distanceKm, relativeSpeedKph) {
-    if (relativeSpeedKph <= 0) {
-        return 9999;
-    }
-
-    return distanceKm / relativeSpeedKph * 3600;
+if (document.body.dataset.page === "admin") {
+    initAdmin();
 }
-
-function headingDiff(heading1, heading2) {
-    let difference = Math.abs(heading1 - heading2);
-
-    if (difference > 180) {
-        difference = 360 - difference;
-    }
-
-    return difference;
-}
-
-function classifyRole(myHeading, otherHeading) {
-    const difference = headingDiff(
-        myHeading,
-        otherHeading
-    );
-
-    if (difference < 45) {
-        return "FRONT";
-    }
-
-    if (difference > 135) {
-        return "INCOMING";
-    }
-
-    return "SIDE";
-}
-
-/* =========================================================
-   REPLAY PROTECTION
-========================================================= */
-
-function isReplay(senderID, counter) {
-    if (
-        replayTable.has(senderID) &&
-        counter <= replayTable.get(senderID)
-    ) {
-        return true;
-    }
-
-    if (
-        !replayTable.has(senderID) &&
-        replayTable.size >= 8
-    ) {
-        const oldestSender =
-            replayTable.keys().next().value;
-
-        replayTable.delete(oldestSender);
-    }
-
-    replayTable.set(senderID, counter);
-    renderReplay(senderID, false);
-
-    return false;
-}
-
-/* =========================================================
-   SIMULATION VALUES
-========================================================= */
-
-function values() {
-    return {
-        mySpeed: Number($("mySpeed").value),
-        otherSpeed: Number($("otherSpeed").value),
-        distance: Number($("distance").value),
-        otherHeading: Number($("otherHeading").value)
-    };
-}
-
-function sensorData() {
-    const valuesData = values();
-
-    const myLat = -0.303099;
-    const myLon = 36.080025;
-
-    const otherLat =
-        myLat + valuesData.distance / 111.195;
-
-    const otherLon = myLon;
-
-    const measuredDistance = haversine(
-        myLat,
-        myLon,
-        otherLat,
-        otherLon
-    );
-
-    const role = classifyRole(
-        0,
-        valuesData.otherHeading
-    );
-
-    const relativeSpeed = Math.abs(
-        valuesData.mySpeed -
-        valuesData.otherSpeed
-    );
-
-    const ttc = computeTTC(
-        measuredDistance,
-        relativeSpeed
-    );
-
-    return {
-        ...valuesData,
-        myLat,
-        myLon,
-        otherLat,
-        otherLon,
-        measuredDistance,
-        role,
-        relativeSpeed,
-        ttc
-    };
-}
-
-/* =========================================================
-   SECURE MESSAGE CREATION
-========================================================= */
-
-async function makeMessage(
-    type = "REQUEST",
-    targetID = "",
-    sender = VEHICLE_ID
-) {
-    const data = sensorData();
-
-    state.counter++;
-
-    let counter = state.counter;
-
-    if (
-        $("packetMode").value === "replay" &&
-        sender !== VEHICLE_ID
-    ) {
-        counter = replayTable.get(sender) || 1;
-    }
-
-    const rawPayload = [
-        type,
-        sender,
-        targetID,
-        counter,
-        Math.floor(state.elapsed * 1000),
-        data.myLat.toFixed(6),
-        data.myLon.toFixed(6),
-        data.mySpeed.toFixed(1),
-        "0.0",
-        data.role,
-        data.ttc.toFixed(1)
-    ].join(",");
-
-    const encrypted = await encryptAES(
-        rawPayload
-    );
-
-    let signature = await hmacSign(
-        encrypted
-    );
-
-    if (
-        $("packetMode").value === "bad-hmac" &&
-        sender !== VEHICLE_ID
-    ) {
-        signature =
-            signature.slice(0, -2) + "00";
-    }
-
-    $("rawPayload").textContent =
-        rawPayload;
-
-    $("encrypted").textContent =
-        encrypted;
-
-    $("signature").textContent =
-        signature;
-
-    return (
-        "OVERTAKE_MSG:" +
-        encrypted +
-        ":" +
-        signature
-    );
-}
-
-/* =========================================================
-   MESSAGE RECEIVING
-========================================================= */
-
-async function receiveMessage(message) {
-    const firstSeparator =
-        message.indexOf(":");
-
-    const lastSeparator =
-        message.lastIndexOf(":");
-
-    if (
-        firstSeparator < 0 ||
-        lastSeparator <= firstSeparator
-    ) {
-        log("Malformed packet ignored");
-        return;
-    }
-
-    const encrypted = message.slice(
-        firstSeparator + 1,
-        lastSeparator
-    );
-
-    const receivedSignature = message.slice(
-        lastSeparator + 1
-    );
-
-    const calculatedSignature =
-        await hmacSign(encrypted);
-
-    if (
-        calculatedSignature !==
-        receivedSignature
-    ) {
-        log("Bad HMAC — packet rejected");
-        return;
-    }
-
-    const rawPayload =
-        await decryptAES(encrypted);
-
-    if (!rawPayload) {
-        log("Decrypt fail — packet rejected");
-        return;
-    }
-
-    const fields = rawPayload.split(",");
-
-    const type = fields[0];
-    const senderID = fields[1];
-    const targetID = fields[2];
-    const counter = Number(fields[3]);
-
-    if (senderID === VEHICLE_ID) {
-        return;
-    }
-
-    if (isReplay(senderID, counter)) {
-        renderReplay(senderID, true);
-
-        log(
-            "Replay ignored from " +
-            senderID
-        );
-
-        return;
-    }
-
-    const data = sensorData();
-
-    if (
-        type === "REQUEST" &&
-        data.role === "INCOMING" &&
-        data.ttc < TTC_THRESHOLD &&
-        data.measuredDistance < ALERT_RADIUS
-    ) {
-        showConsent(senderID);
-    }
-
-    if (
-        type === "CONSENT_GRANTED" &&
-        targetID === VEHICLE_ID
-    ) {
-        showGranted(senderID);
-    }
-}
-
-/* =========================================================
-   REQUEST BROADCASTING
-========================================================= */
-
-async function broadcastRequest() {
-    if (!state.running) {
-        return;
-    }
-
-    const outgoingMessage =
-        await makeMessage();
-
-    log(
-        "Sent REQUEST: " +
-        outgoingMessage.slice(0, 68) +
-        "…"
-    );
-
-    const incomingMessage =
-        await makeMessage(
-            "REQUEST",
-            "",
-            "KBZ804Q"
-        );
-
-    await receiveMessage(
-        incomingMessage
-    );
-}
-
-/* =========================================================
-   CONSENT REQUEST
-========================================================= */
-
-function showConsent(senderID) {
-    clearInterval(consentTimer);
-
-    state.requester = senderID;
-    state.consentLeft = 4;
-
-    lcd(
-        "Overtake req",
-        "Btn=Yes"
-    );
-
-    led("green", true);
-
-    $("consent").disabled = false;
-
-    $("consentTimer").textContent =
-        "Request from " +
-        senderID +
-        " • 4.0 s";
-
-    consentTimer = setInterval(() => {
-        state.consentLeft -= 0.1;
-
-        $("consentTimer").textContent =
-            "Request from " +
-            senderID +
-            " • " +
-            Math.max(
-                0,
-                state.consentLeft
-            ).toFixed(1) +
-            " s";
-
-        if (state.consentLeft <= 0) {
-            clearInterval(consentTimer);
-
-            $("consent").disabled = true;
-
-            led("green", false);
-
-            lcd(
-                "No consent",
-                "Request expired"
-            );
-
-            log(
-                "No consent sent to " +
-                senderID
-            );
-        }
-    }, 100);
-}
-
-async function grantConsent() {
-    if (!state.requester) {
-        return;
-    }
-
-    clearInterval(consentTimer);
-
-    $("consent").disabled = true;
-
-    led("green", false);
-
-    lcd(
-        "Consent sent",
-        state.requester.slice(0, 16)
-    );
-
-    await makeMessage(
-        "CONSENT_GRANTED",
-        state.requester
-    );
-
-    log(
-        "CONSENT_GRANTED sent to " +
-        state.requester
-    );
-
-    const returnedMessage =
-        await makeMessage(
-            "CONSENT_GRANTED",
-            VEHICLE_ID,
-            state.requester
-        );
-
-    await receiveMessage(
-        returnedMessage
-    );
-}
-
-function showGranted(senderID) {
-    lcd(
-        "Consent from:",
-        senderID.slice(0, 16)
-    );
-
-    led("green", true);
-
-    log(
-        "Valid consent received from " +
-        senderID
-    );
-
-    setTimeout(() => {
-        led("green", false);
-
-        const data = sensorData();
-
-        if (
-            data.ttc >= TTC_THRESHOLD ||
-            data.measuredDistance >= ALERT_RADIUS
-        ) {
-            lcd(
-                "Proceed only if",
-                "road is clear"
-            );
-
-            decision(
-                "CONSENT + SAFE GAP",
-                "safe"
-            );
-        } else {
-            lcd(
-                "DO NOT OVERTAKE",
-                "Unsafe TTC"
-            );
-
-            decision(
-                "OVERTAKE BLOCKED",
-                "danger"
-            );
-        }
-    }, 900);
-}
-
-/* =========================================================
-   AUTOMATIC SAFETY
-========================================================= */
-
-function automaticSafety(data) {
-    const mySpeedMps =
-        data.mySpeed / 3.6;
-
-    const otherSpeedMps =
-        data.otherSpeed / 3.6;
-
-    const brakingDeceleration = 6.5;
-    const safetyMarginKm = 0.012;
-
-    const stoppingDistanceKm =
-        (
-            mySpeedMps ** 2 +
-            otherSpeedMps ** 2
-        ) /
-        (
-            2 *
-            brakingDeceleration
-        ) /
-        1000 +
-        safetyMarginKm;
-
-    const physicalTTC =
-        data.role === "INCOMING"
-            ? data.measuredDistance /
-              Math.max(
-                  1,
-                  data.mySpeed +
-                  data.otherSpeed
-              ) *
-              3600
-            : data.ttc;
-
-    if (
-        data.role === "INCOMING" &&
-        (
-            physicalTTC < TTC_THRESHOLD ||
-            stoppingDistanceKm >=
-            data.measuredDistance
-        )
-    ) {
-        decision(
-            "AUTOMATIC SLOWING",
-            "danger"
-        );
-
-        led("red", true);
-
-        state.displaySpeed = Math.max(
-            0,
-            state.displaySpeed - 12 / 60
-        );
-    } else {
-        const frontWarning =
-            data.role === "FRONT" &&
-            data.relativeSpeed > 0;
-
-        decision(
-            frontWarning
-                ? "VEHICLE AHEAD"
-                : "MONITORING",
-            frontWarning
-                ? "warn"
-                : "safe"
-        );
-
-        led("red", false);
-
-        state.displaySpeed +=
-            (
-                data.mySpeed -
-                state.displaySpeed
-            ) *
-            0.02;
-    }
-}
-
-/* =========================================================
-   ANIMATION
-========================================================= */
-
-function animate(currentTime) {
-    if (!state.running) {
-        return;
-    }
-
-    const deltaTime = Math.min(
-        0.05,
-        (
-            currentTime -
-            state.last
-        ) /
-        1000
-    );
-
-    state.last = currentTime;
-    state.elapsed += deltaTime;
-
-    const data = sensorData();
-
-    automaticSafety(data);
-    drawRoad(data);
-    renderMetrics(data);
-
-    animationFrame =
-        requestAnimationFrame(animate);
-}
-
-/* =========================================================
-   ROAD DRAWING
-========================================================= */
-
-function drawRoad(data) {
-    const canvas = $("road");
-    const context = canvas.getContext("2d");
-
-    const width = canvas.width;
-    const height = canvas.height;
-
-    context.clearRect(
-        0,
-        0,
-        width,
-        height
-    );
-
-    context.fillStyle = "#173b25";
-
-    context.fillRect(
-        0,
-        0,
-        width,
-        height
-    );
-
-    context.fillStyle = "#363c42";
-
-    context.fillRect(
-        0,
-        85,
-        width,
-        220
-    );
-
-    context.strokeStyle = "#f2d85c";
-    context.lineWidth = 4;
-    context.setLineDash([22, 17]);
-
-    context.beginPath();
-    context.moveTo(0, 195);
-    context.lineTo(width, 195);
-    context.stroke();
-
-    context.setLineDash([]);
-
-    context.fillStyle = "#e8edf1";
-    context.font =
-        "bold 14px system-ui";
-
-    context.fillText(
-        "KDA123X • LEFT LANE",
-        45,
-        60
-    );
-
-    context.fillText(
-        data.role + " VEHICLE",
-        width - 190,
-        60
-    );
-
-    const myPosition = 110;
-
-    const progress = Math.min(
-        1,
-        (
-            1 -
-            data.distance
-        ) /
-        0.95
-    );
-
-    const otherPosition =
-        width -
-        110 -
-        progress *
-        250;
-
-    drawVehicle(
-        context,
-        myPosition,
-        235,
-        "#27d4ff",
-        "KDA",
-        false
-    );
-
-    drawVehicle(
-        context,
-        otherPosition,
-        data.role === "INCOMING"
-            ? 135
-            : 235,
-        "#ff9d61",
-        "OTHER",
-        data.role === "INCOMING"
-    );
-
-    context.strokeStyle =
-        "#27d4ff88";
-
-    context.lineWidth = 3;
-    context.setLineDash([8, 7]);
-
-    context.beginPath();
-
-    context.arc(
-        myPosition,
-        235,
-        65 +
-        Math.sin(
-            state.elapsed * 5
-        ) *
-        8,
-        0,
-        Math.PI * 2
-    );
-
-    context.stroke();
-    context.setLineDash([]);
-
-    context.fillStyle = "#a7bed0";
-    context.font = "13px system-ui";
-
-    context.fillText(
-        "LoRa secure request every 3 seconds",
-        330,
-        350
-    );
-}
-
-function drawVehicle(
-    context,
-    positionX,
-    positionY,
-    color,
-    label,
-    reverse
-) {
-    context.save();
-
-    context.translate(
-        positionX,
-        positionY
-    );
-
-    if (reverse) {
-        context.rotate(Math.PI);
-    }
-
-    context.fillStyle = color;
-
-    context.fillRect(
-        -37,
-        -17,
-        74,
-        34
-    );
-
-    context.fillStyle = "#0a1822";
-
-    context.fillRect(
-        8,
-        -13,
-        21,
-        26
-    );
-
-    context.fillStyle = "#07111d";
-    context.font =
-        "bold 11px system-ui";
-
-    context.textAlign = "center";
-
-    context.fillText(
-        label,
-        -8,
-        4
-    );
-
-    context.restore();
-}
-
-/* =========================================================
-   INTERFACE UPDATES
-========================================================= */
-
-function renderMetrics(data) {
-    $("metricDistance").textContent =
-        data.measuredDistance.toFixed(3) +
-        " km";
-
-    $("metricRelative").textContent =
-        data.relativeSpeed.toFixed(0) +
-        " km/h";
-
-    $("metricTTC").textContent =
-        data.ttc >= 9999
-            ? "∞"
-            : data.ttc.toFixed(1) +
-              " s";
-
-    $("metricRole").textContent =
-        data.role;
-}
-
-function renderReplay(
-    sender,
-    replay
-) {
-    $("replayBody").innerHTML =
-        [...replayTable]
-            .map(
-                ([id, counter]) => `
-                    <tr>
-                        <td>${id}</td>
-                        <td>${counter}</td>
-                        <td>
-                            ${
-                                id === sender &&
-                                replay
-                                    ? "REPLAY REJECTED"
-                                    : "ACCEPTED"
-                            }
-                        </td>
-                    </tr>
-                `
-            )
-            .join("");
-}
-
-function lcd(line1, line2) {
-    $("lcd1").textContent =
-        line1
-            .slice(0, 16)
-            .padEnd(16);
-
-    $("lcd2").textContent =
-        line2
-            .slice(0, 16)
-            .padEnd(16);
-}
-
-function led(name, enabled) {
-    $(name + "Led").className =
-        name +
-        (
-            enabled
-                ? " on"
-                : ""
-        );
-}
-
-function decision(text, level) {
-    $("safetyDecision").textContent =
-        text;
-
-    $("safetyDecision").className =
-        "decision " + level;
-}
-
-function log(message) {
-    $("log").textContent =
-        state.elapsed
-            .toFixed(1)
-            .padStart(5) +
-        "s  " +
-        message +
-        "\n" +
-        $("log").textContent;
-}
-
-/* =========================================================
-   START AND RESET
-========================================================= */
-
-function start() {
-    if (state.running) {
-        return;
-    }
-
-    state.running = true;
-    state.last = performance.now();
-
-    $("start").textContent =
-        "Running";
-
-    $("systemBadge").textContent =
-        "LORA ACTIVE";
-
-    lcd(
-        "Overtake Safety",
-        "LoRa active"
-    );
-
-    broadcastRequest();
-
-    requestTimer = setInterval(
-        broadcastRequest,
-        3000
-    );
-
-    animationFrame =
-        requestAnimationFrame(animate);
-}
-
-function reset() {
-    cancelAnimationFrame(
-        animationFrame
-    );
-
-    clearInterval(
-        requestTimer
-    );
-
-    clearInterval(
-        consentTimer
-    );
-
-    replayTable.clear();
-
-    state = {
-        running: false,
-        elapsed: 0,
-        counter: 0,
-        requester: "",
-        displaySpeed:
-            Number($("mySpeed").value),
-        last: 0
-    };
-
-    $("start").textContent =
-        "Start simulation";
-
-    $("systemBadge").textContent =
-        "SYSTEM READY";
-
-    $("replayBody").innerHTML = `
-        <tr>
-            <td colspan="3">
-                No packets received
-            </td>
-        </tr>
-    `;
-
-    $("rawPayload").textContent =
-        "Waiting…";
-
-    $("encrypted").textContent =
-        "Waiting…";
-
-    $("signature").textContent =
-        "Waiting…";
-
-    $("log").textContent =
-        "115200 baud — System Ready";
-
-    $("consent").disabled = true;
-
-    $("consentTimer").textContent =
-        "No consent request";
-
-    lcd(
-        "Overtake Safety",
-        "System Ready"
-    );
-
-    led("green", false);
-    led("red", false);
-
-    decision(
-        "MONITORING",
-        "safe"
-    );
-
-    const data = sensorData();
-
-    renderMetrics(data);
-    drawRoad(data);
-}
-
-/* =========================================================
-   EVENT LISTENERS
-========================================================= */
-
-[
-    "mySpeed",
-    "otherSpeed",
-    "distance"
-].forEach(id => {
-    $(id).addEventListener(
-        "input",
-        () => {
-            const suffix =
-                id === "distance"
-                    ? " km"
-                    : " km/h";
-
-            $(id + "Text").textContent =
-                Number($(id).value)
-                    .toFixed(
-                        id === "distance"
-                            ? 2
-                            : 0
-                    ) +
-                suffix;
-
-            if (!state.running) {
-                const data =
-                    sensorData();
-
-                renderMetrics(data);
-                drawRoad(data);
-            }
-        }
-    );
-});
-
-$("otherHeading").addEventListener(
-    "change",
-    () => {
-        if (!state.running) {
-            const data =
-                sensorData();
-
-            renderMetrics(data);
-            drawRoad(data);
-        }
-    }
-);
-
-$("start").addEventListener(
-    "click",
-    start
-);
-
-$("reset").addEventListener(
-    "click",
-    reset
-);
-
-$("consent").addEventListener(
-    "click",
-    grantConsent
-);
-
-reset();
