@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Hotpoint Tools Tracker | Request Tool</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="request">
+  <div class="shell">
+    <header>
+      <div><div class="eyebrow">HOTPOINT APPLIANCES</div><h1>Tools Tracker</h1><p>Check tool availability, current allocations and technician history.</p></div>
+      <a class="button secondary" href="admin.html">Admin Login</a>
+    </header>
+
+    <nav class="tabs" aria-label="Page navigation"><a class="active" href="index.html">Request Tool</a><a href="admin.html">Admin</a></nav>
+
+    <section class="summary" aria-label="Inventory summary">
+      <article class="stat"><span>Total units</span><strong id="totalUnits">0</strong></article>
+      <article class="stat available"><span>Available</span><strong id="availableUnits">0</strong></article>
+      <article class="stat allocated"><span>Allocated</span><strong id="allocatedUnits">0</strong></article>
+    </section>
+
+    <main class="card">
+      <div class="section-head"><div><h2>REQUEST TOOL</h2><p>Availability updates when an administrator assigns or releases a unit.</p></div><label class="search"><span class="sr-only">Search tools</span><input id="toolSearch" type="search" placeholder="Search tool or technician…"></label></div>
+      <div id="toolGrid" class="tool-grid"></div>
+      <div id="emptyTools" class="empty" hidden>No tools match your search.</div>
+    </main>
+
+    <section class="card history-card">
+      <div class="section-head"><div><h2>Allocation History</h2><p>See who received each tool and when it was released.</p></div><label><span class="sr-only">Filter technician</span><select id="historyFilter"><option value="">All technicians</option></select></label></div>
+      <div class="table-wrap"><table><thead><tr><th>Technician</th><th>Tool</th><th>Assigned</th><th>Released</th><th>Status</th></tr></thead><tbody id="historyBody"></tbody></table></div>
+      <div id="emptyHistory" class="empty" hidden>No allocation history yet.</div>
+    </section>
+    <footer>Hotpoint Tools Tracker • Inventory visibility for the technical team</footer>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>

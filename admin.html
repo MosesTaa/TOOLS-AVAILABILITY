@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Hotpoint Tools Tracker | Admin</title><link rel="stylesheet" href="style.css">
+</head>
+<body data-page="admin">
+  <div class="shell">
+    <header><div><div class="eyebrow">HOTPOINT APPLIANCES</div><h1>Tools Tracker</h1><p>Manage inventory and technician allocations.</p></div><a class="button secondary" href="index.html">Request Tool Page</a></header>
+    <nav class="tabs"><a href="index.html">Request Tool</a><a class="active" href="admin.html">Admin</a></nav>
+
+    <main id="loginPanel" class="auth-wrap">
+      <form id="loginForm" class="card auth-card">
+        <span class="lock-icon">ADMIN</span><h2>Administrator Login</h2><p>Sign in to change inventory and allocations.</p>
+        <label>Username<input id="username" autocomplete="username" required></label>
+        <label>Password<input id="password" type="password" autocomplete="current-password" required></label>
+        <p id="loginError" class="form-error" role="alert"></p><button type="submit">Sign In</button>
+      </form>
+    </main>
+
+    <main id="adminPanel" hidden>
+      <div class="admin-bar"><div><span class="badge">Admin session</span><h2>Inventory Management</h2></div><button id="logoutBtn" class="danger-button">Log Out</button></div>
+      <section class="admin-grid">
+        <form id="toolForm" class="card">
+          <h2>Add a Tool</h2><p>Create an inventory item and set its total quantity.</p>
+          <label>Tool name<input id="toolName" required placeholder="e.g. Vacuum pump"></label>
+          <label>Quantity<input id="toolQuantity" type="number" min="1" step="1" required value="1"></label>
+          <label>Description<textarea id="toolDescription" rows="4" required placeholder="Tool details or identification notes"></textarea></label>
+          <button type="submit">Add Tool</button>
+        </form>
+        <form id="assignmentForm" class="card">
+          <h2>Assign a Tool</h2><p>Allocate one available unit to a technician.</p>
+          <label>Tool<select id="assignTool" required></select></label>
+          <label>Technician name<input id="technicianName" required placeholder="Full name"></label>
+          <label>Date assigned<input id="assignedDate" type="date" required></label>
+          <button id="assignBtn" type="submit">Assign Tool</button>
+        </form>
+      </section>
+      <section class="card"><div class="section-head"><div><h2>Current Inventory</h2><p>Edit quantity, review allocated units, release tools or remove items.</p></div></div><div id="adminInventory" class="admin-inventory"></div></section>
+    </main>
+    <footer>Hotpoint Tools Tracker • Administrator controls</footer>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>
